@@ -1,0 +1,72 @@
+# Testing-only compose file for PR sandboxes. Not used in production, and not a
+# variant of anything Ghost ships -- Ghost's own compose.dev.yaml runs a
+# five-service development stack (MySQL, Redis, Mailpit, a Caddy gateway).
+#
+# Dockerfile.qlane is Dockerfile.production with one added stage: it builds the
+# admin UI in-container instead of expecting CI to inject a prebuilt one, so the
+# admin under test is the one this commit produces.
+#
+# SERVICE NAMING, deliberately: the sandbox's primary service is `ghost` on port
+# 2368, and that is what the preview URL points at. Ghost itself therefore runs
+# as `ghost-app`, and `ghost` is a thin proxy in front of it. The reason is in
+# the proxy config below.
+services:
+  ghost:
+    # Built, not pulled: the primary service must build from source, and this
+    # one does -- see Dockerfile.edge for why a proxy is here at all.
+    image: ghost-edge-pr:test
+    pull_policy: build
+    build:
+      context: .
+      dockerfile: Dockerfile.edge
+    ports:
+      - "2368:2368"
+    depends_on:
+      ghost-app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:2368/healthz || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  ghost-app:
+    # Unregistrable tag: a container reporting this image can only have been
+    # built here, never pulled.
+    image: ghost-pr:test
+    pull_policy: build
+    build:
+      context: .
+      dockerfile: Dockerfile.qlane
+      target: full
+    environment:
+      NODE_ENV: production
+      # defaults.json binds 127.0.0.1; inside a container that leaves the
+      # published port with nothing to forward to.
+      server__host: 0.0.0.0
+      server__port: 2368
+      # config.production.json defaults to mysql; use the embedded store so no
+      # backing service is needed.
+      database__client: sqlite3
+      database__connection__filename: /home/ghost/content/data/ghost.db
+      # Production defaults to file transports, which would hide every log line.
+      logging__transports: '["stdout"]'
+      # The sandbox's externally reachable address, injected as a system
+      # variable. No :-default -- a Compose-style modifier inside the QLANE_
+      # namespace stops the run with an error.
+      url: ${QLANE_SANDBOX_PUBLIC_URL}
+    healthcheck:
+      # Not localhost: a loopback-bound server answers its own loopback, so a
+      # localhost probe passes precisely when the bind address is wrong. Any
+      # response counts, including a redirect -- this only proves reachability
+      # on the bridge address. redirect:manual stops fetch chasing the external
+      # host from inside the container.
+      test:
+        - CMD-SHELL
+        - node -e "fetch('http://ghost-app:2368/ghost/',{redirect:'manual'}).then(()=>process.exit(0)).catch(()=>process.exit(1))"
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 90s
+
