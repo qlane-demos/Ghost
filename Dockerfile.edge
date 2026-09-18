@@ -1,0 +1,17 @@
+# Testing-only edge proxy for PR sandboxes. Built from this repository rather
+# than pulled, so the primary service satisfies the "builds from source" rule
+# the way every other service does.
+#
+# It exists for exactly one reason: the sandbox edge terminates TLS and forwards
+# plain HTTP without X-Forwarded-Proto. Ghost redirects when the configured URL
+# is SSL and req.secure is false (core/server/web/shared/middleware/
+# url-redirects.js), so it 301s to the very URL that was requested -- an
+# infinite redirect. Ghost already trusts proxies (defaults.json
+# usingLoopbackReverseProxy=false), so supplying the header here is all that is
+# missing. The application under test is ghost-app; every request is proxied to
+# it unmodified apart from the forwarded headers.
+FROM nginx:1.27-alpine
+
+COPY edge.nginx.conf /etc/nginx/conf.d/default.conf
+
+EXPOSE 2368
